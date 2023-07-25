@@ -7,6 +7,7 @@
 			"repo_path": "path_to_repo",
 			"backup_path": "path_to_backup",
 			"password_file": "password_file_location",
+			"restic_path": "/path/to/restic/bin",
 			"options": {
 				"no-scan": true,
 				"compression": "auto", 
@@ -28,6 +29,7 @@
 			"repo_path": "https://examples3url.com/repo_name/",
 			"backup_path": "path_to_backup",
 			"password_file": "password_file_location",
+			"restic_path": "/path/to/restic/bin",
 			"options": {
 				"no-scan": true,
 				"compression": "auto", 
@@ -50,6 +52,7 @@
 			"repo_path": "path_to_repo",
 			"backup_path": "path_to_backup",
 			"password_file": "password_file_location",
+			"restic_path": "/path/to/restic/bin",
 			"options": {
 				"no-scan": false,
 				"compression": "auto", 
