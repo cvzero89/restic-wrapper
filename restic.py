@@ -47,7 +47,7 @@ class ResticBackup:
     Defining the restic class to backup, list snaphosts, restore, mount and forget.
     Includes a subprocess method that will print output while executing, useful for restores and backups which will take long and will only clear the buffer at the end of the command.
     '''
-    def __init__(self, enabled, backup_type, host, repo_path, backup_path, password_file, options=None, forget_options=None, exclude=None):
+    def __init__(self, enabled, backup_type, host, repo_path, backup_path, password_file, restic_path, options=None, forget_options=None, exclude=None):
         self.repo_path = repo_path
         self.backup_path = backup_path
         self.options = options
@@ -57,6 +57,7 @@ class ResticBackup:
         self.password_file = password_file
         self.forget_options = forget_options
         self.enabled = enabled
+        self.restic = restic_path
 
     def run_command(self, cmd):
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
@@ -95,17 +96,17 @@ class ResticBackup:
 
         if job == 'backup':
             exclude_file = self.set_exclude()
-            cmd = f'restic -r {host} {options} --exclude-file={exclude_file} {job} {self.backup_path} --password-file {self.password_file}'
+            cmd = f'{self.restic} -r {host} {options} --exclude-file={exclude_file} {job} {self.backup_path} --password-file {self.password_file}'
         elif job == 'snapshots':
-            cmd = f'restic -r {host} {job} --password-file {self.password_file}'
+            cmd = f'{self.restic} -r {host} {job} --password-file {self.password_file}'
         elif job == 'restore':
-            cmd = f'restic -r {host} {job} {snapshot_id} --target {restore_path} --password-file {self.password_file}'
+            cmd = f'{self.restic} -r {host} {job} {snapshot_id} --target {restore_path} --password-file {self.password_file}'
         elif job == 'forget':
-            cmd = f'restic -r {host} {job} --keep-daily {forget_list[0]} --keep-weekly {forget_list[1]} --keep-monthly {forget_list[2]} --password-file {self.password_file}'
+            cmd = f'{self.restic} -r {host} {job} --keep-daily {forget_list[0]} --keep-weekly {forget_list[1]} --keep-monthly {forget_list[2]} --password-file {self.password_file}'
         elif job == 'init':
-            cmd = f'restic -r {host} {job} --password-file {self.password_file}' 
+            cmd = f'{self.restic} -r {host} {job} --password-file {self.password_file}' 
         elif job == 'mount':
-            cmd = f'restic -r {host} {job} {restore_path} --password-file {self.password_file}'
+            cmd = f'{self.restic} -r {host} {job} {restore_path} --password-file {self.password_file}'
         else:
             print(f'Task is not defined.')
             logging.warning(f'Task is not defined. Exiting.')
