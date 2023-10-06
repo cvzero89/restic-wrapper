@@ -235,7 +235,7 @@ class ResticBackup:
         s3_file = self.options['.env-file']
         if self.backup_type == 's3':
             from dotenv import load_dotenv
-            load_dotenv(f'{script_path}/config/{s3_file}')
+            load_dotenv(f'{s3_file}')
             os.getenv('AWS_ACCESS_KEY_ID')
             os.getenv('AWS_SECRET_ACCESS_KEY')
             os.getenv('AWS_DEFAULT_REGION')
