@@ -34,7 +34,7 @@
 				"no-scan": true,
 				"compression": "auto", 
 				"read-concurrency": false,
-				".env-file": ".s3.env"
+				".env-file": "/path/to/.s3.env"
 			},
 			"forget_options": {
 				"daily": 1,
