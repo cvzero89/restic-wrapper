@@ -11,7 +11,8 @@
 			"options": {
 				"no-scan": true,
 				"compression": "auto", 
-				"read-concurrency": false
+				"read-concurrency": false,
+				"tags": "tag1,tag2"
 			},
 			"forget_options": {
 				"daily": 1,
