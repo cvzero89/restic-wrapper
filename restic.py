@@ -107,6 +107,8 @@ class ResticBackup:
             cmd = f'{self.restic} -r {host} {job} --password-file {self.password_file}' 
         elif job == 'mount':
             cmd = f'{self.restic} -r {host} {job} {restore_path} --password-file {self.password_file}'
+        elif job[0] == 'other':
+            cmd = f'{self.restic} -r {host} {job[1]} --password-file {self.password_file}'
         else:
             print(f'Task is not defined.')
             logging.warning(f'Task is not defined. Exiting.')
@@ -158,13 +160,13 @@ class ResticBackup:
     def list_snapshots(self, options=None, forget_list=None, snapshot_id=None, restore_path=None):
         job = 'snapshots'
         cmd = self.type_selector(job, options, forget_list, snapshot_id, restore_path)
-        print(f'Listing snapshots from {self.backup_type}:')
+        print(f'Listing snapshots from {self.backup_type}:{self.repo_path}.')
         stdout, stderr = self.run_command(cmd)
         if stderr:
            print(f'Error listing snapshots: {stderr}')
            logging.debug(f'Error listing snapshots: {stderr}')
            return False
-        logging.info(f'Listed snapshots from: {self.backup_type}.')
+        logging.info(f'Listed snapshots from: {self.backup_type}:{self.repo_path}.')
 
     def restore(self, snapshot_id, restore_path, options=None, forget_list=None):
         if not snapshot_id or not restore_path:
@@ -203,6 +205,17 @@ class ResticBackup:
         print(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
         logging.info(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
 
+    def other(self, command, forget_list=None, options=None, snapshot_id=None, restore_path=None):
+        job = ['other', command]
+        cmd = self.type_selector(job, options, forget_list, snapshot_id, restore_path)
+        stdout, stderr = self.run_command(cmd)
+        if stderr:
+            print(f'Ran {command} at  {stderr}')
+            logging.debug(f'Ran {command} at {self.backup_type}:{self.repo_path}.')
+            return False
+        print(f'Ran {command} at {self.backup_type}:{self.repo_path}. {stdout}')
+        logging.info(f'Ran {command} at {self.backup_type}:{self.repo_path}.')
+
 
     def option_parser(self):
         options_dict = self.options
@@ -212,10 +225,16 @@ class ResticBackup:
                 options.append('--no-scan')
             if options_dict['read-concurrency'] == True:
                 options.append('--read-concurrency')
-            if options_dict['compression'] == 'auto':
-                options.append('--compression=auto')
-            if options_dict['compression'] == 'max':
-                options.append('--compression=max')
+            if options_dict['compression']:
+                compression = f"--compression={options_dict['compression']}"
+                options.append(compression)
+            try:
+                if options_dict['tags']:
+                    for tag in options_dict['tags'].split(','):
+                        tagger = f'--tag {tag}'
+                        options.append(tagger)
+            except KeyError:
+                ...
         return ' '.join(options)
 
     def forget_parser(self):
@@ -255,14 +274,17 @@ class ResticBackup:
 
 
 
-def choice(action, task, snapshot_id, restore_path, single):
+def choice(action, task, snapshot_id, restore_path, single, command):
     '''
     To trigger the actions.
     Restore, create and mount cannot run for all repos, a single repo must be chosen with --single <repo>
     '''
-
-
     logging.info(f'Task is set to {action}')
+    if action == 'other':
+        if not command:
+            print(f'Command is empty.')
+            sys.exit()
+        task.other(command)
     if action == 'backup':
         options = task.option_parser()
         task.backup(options)
@@ -283,7 +305,7 @@ def choice(action, task, snapshot_id, restore_path, single):
             logging.warning(f'Action was set to {action} but all repos were selected. Exiting.')
             sys.exit()
         task.mount(restore_path)
-    else:
+    elif action == 'init':
         if not single:
             print(f'Cannot {action} all repos, use --single.')
             logging.warning(f'Action was set to {action} but all repos were selected. Exiting.')
@@ -296,12 +318,14 @@ def main():
     parser.add_argument('--single', type=str, help='Single repo from config.')
     parser.add_argument('--snapshot_id', type=str, help='Use snapshot ID as argument.')
     parser.add_argument('--restore_path', type=str, help='Set restore path.')
-    parser.add_argument('action', type=str, help='init, backup, restore, snapshots, mount or forget.', choices=['init', 'backup', 'forget', 'snapshots', 'restore', 'mount'])
+    parser.add_argument('--command', type=str, help='Pass other command.')
+    parser.add_argument('action', type=str, help='init, backup, restore, snapshots, mount or forget.', choices=['init', 'backup', 'forget', 'snapshots', 'restore', 'mount', 'other'])
     args = parser.parse_args()
     single = args.single
     action = args.action
     snapshot_id = args.snapshot_id
     restore_path = args.restore_path
+    command = args.command
     if single in loaded_keys:
         loaded_config = load_environment(single)
         if loaded_config == 'KeyError':
@@ -309,7 +333,7 @@ def main():
         if loaded_config == 'disabled':
             sys.exit() 
         task = ResticBackup(*loaded_config)
-        choice(action, task, snapshot_id, restore_path, single)
+        choice(action, task, snapshot_id, restore_path, single, command)
     elif single == '' or single == None:
         for restic_task in loaded_keys:
             loaded_config = load_environment(restic_task)
@@ -318,11 +342,10 @@ def main():
             if loaded_config == 'disabled':
                 continue 
             task = ResticBackup(*loaded_config)
-            choice(action, task, snapshot_id, restore_path, single)
+            choice(action, task, snapshot_id, restore_path, single, command)
     else:
         print(f'Selection cannot be found in JSON file. Running all tasks.')
         logging.warning(f'Selection cannot be found in JSON file. Running all tasks.')
 
 if __name__ == '__main__':
     main()
-
