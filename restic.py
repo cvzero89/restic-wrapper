@@ -18,7 +18,6 @@ except FileNotFoundError:
     logging.debug(f'No configuration file at: {config_location}.')
     exit()
 
-
 def load_environment(restic_task):
 
     '''
@@ -32,9 +31,6 @@ def load_environment(restic_task):
         print(f'Skipping {restic_task} as it is disabled in the configuration file.')
         return None
     return config['servers'][restic_task]
-
-
-
 
 def choice(action, task, snapshot_id, restore_path, single, command):
     '''
@@ -72,7 +68,6 @@ def choice(action, task, snapshot_id, restore_path, single, command):
             logging.warning(f'Action was set to {action} but all repos were selected. Exiting.')
             sys.exit()
         task.create()
-
 
 def main():
     parser = argparse.ArgumentParser(description='Create and manage backups using restic.')

@@ -46,7 +46,7 @@ class ResticBackup:
         logging.debug(f'Ran command {cmd}.')
         return stdout, stderr
 
-    def type_selector(self, job, options, snapshot_id, restore_path):
+    def type_selector(self, job, options=None, snapshot_id=None, restore_path=None):
 
         '''
         type_selector is used to modify the restic command based on the type of host used, local, FTP or S3.
@@ -82,9 +82,9 @@ class ResticBackup:
             sys.exit()
         return cmd
 
-    def create(self, options=None, snapshot_id=None, restore_path=None):
+    def create(self):
         job = 'init'
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
+        cmd = self.type_selector(job)
         stdout, stderr = self.run_command(cmd)
         if stderr:
             print(f'Error initializing repository: {stderr}')
@@ -94,13 +94,13 @@ class ResticBackup:
         logging.info(f'Successfully created repo for {self.repo_path} on {self.backup_type}.')
 
 
-    def backup(self, options, snapshot_id=None, restore_path=None):
+    def backup(self, options):
         '''
         Backup options can be set on the config file.
         '''
         job = 'backup'
         now = datetime.datetime.now()
-        cmd = self.type_selector(job, options, snapshot_id, restore_path) 
+        cmd = self.type_selector(job, options) 
         stdout, stderr = self.run_command(cmd)
         if stderr:
            print(f'Error creating backup: {stderr}')
@@ -109,13 +109,13 @@ class ResticBackup:
         print(f'{stdout}\nSuccessfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
         logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
     
-    def forget(self, options=None, snapshot_id=None, restore_path=None):
+    def forget(self):
         '''
         Forget parameters can be set on the config file.
         '''
         job = 'forget'
         now = datetime.datetime.now()
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
+        cmd = self.type_selector(job)
         stdout, stderr = self.run_command(cmd)
         if stderr:
             print(f'Error forgetting old snapshots: {stderr}')
@@ -124,9 +124,9 @@ class ResticBackup:
         print(f'{stdout}\nSuccessfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
         logging.info(f'Successfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
 
-    def list_snapshots(self, options=None, snapshot_id=None, restore_path=None):
+    def list_snapshots(self):
         job = 'snapshots'
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
+        cmd = self.type_selector(job)
         print(f'Listing snapshots from {self.backup_type}:{self.repo_path}.')
         stdout, stderr = self.run_command(cmd)
         if stderr:
@@ -172,9 +172,9 @@ class ResticBackup:
         print(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
         logging.info(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
 
-    def other(self, command, options=None, snapshot_id=None, restore_path=None):
+    def other(self, command):
         job = ['other', command]
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
+        cmd = self.type_selector(job)
         stdout, stderr = self.run_command(cmd)
         if stderr:
             print(f'Ran {command} at  {stderr}')
@@ -182,7 +182,6 @@ class ResticBackup:
             return False
         print(f'Ran {command} at {self.backup_type}:{self.repo_path}. {stdout}')
         logging.info(f'Ran {command} at {self.backup_type}:{self.repo_path}.')
-
 
     def option_parser(self):
         options_dict = self.options
@@ -203,7 +202,6 @@ class ResticBackup:
             except KeyError:
                 ...
         return ' '.join(options)
-
 
     def s3_env_set(self):
         '''
