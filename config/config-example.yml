@@ -1,0 +1,37 @@
+restic_path: /add/your/path/
+servers:
+  server_1: 
+      enabled: true
+      type: sftp
+      host: user@ip_or_hostname
+      repo_path: /path/to/the/repo/at/host
+      backup_path: /path/to/backup
+      password_file: /password/file/for/the/repo
+      options: 
+        no-scan: true
+        compression: auto 
+        read-concurrency: false
+        tags: tags  
+      forget_options: 
+        daily: 2
+        weekly: 4
+        monthly: 4
+      exclude: anything_to_exclude?
+  
+  server_2:
+    enabled: true
+    type: s3
+    repo_path: https://URL_to_the_repo
+    backup_path: /path/to/backup
+    password_file: /password/file/for/the/repo
+    options: 
+      no-scan: true
+      compression: auto 
+      read-concurrency: false
+      .env-file: /.env/file/for/the/repo
+      tags: tags
+    forget_options:
+      daily: 2
+      weekly: 4
+      monthly: 4
+    exclude: anything_to_exclude?
