@@ -1,10 +1,18 @@
-config.yml
+*.yml
+*.yaml
+!config-example.yml
+!config-example.yaml
+!client-example.yaml
+!server-example.yaml
 *.log
 excludes.txt
 
+.password_file
+.s3.env
+*.live
 .DS_Store
 
-
+*.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

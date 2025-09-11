@@ -1,0 +1,9 @@
+server: 
+  db: 'backups.db'
+  default_backup_interval: 24
+
+logging:
+  log_file: "server.log"
+  log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  max_log_size: 5242880  # 5MB in bytes
+  backup_count: 5  # Keep last 5 log files

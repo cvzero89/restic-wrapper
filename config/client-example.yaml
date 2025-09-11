@@ -1,0 +1,9 @@
+server_url: 'http://localhost:8888' ## Change to the real host and port 
+check_interval: 6
+python_interp: '/Users/user/example/venv/bin/python3' ## Change to the Python interpreter to be used
+
+logging:
+  log_file: "client.log"
+  log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  max_log_size: 5242880  # 5MB in bytes
+  backup_count: 5  # Keep last 5 log files

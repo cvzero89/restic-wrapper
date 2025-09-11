@@ -6,7 +6,7 @@ import yaml
 from assets.backup import ResticBackup
 
 script_path = os.path.abspath(os.path.dirname(__file__))
-logging.basicConfig(filename=f'{script_path}/config/restic.log', encoding='utf-8', level=logging.INFO, format='%(asctime)s %(message)s', datefmt='%d/%m/%Y %I:%M:%S %p')
+logging.basicConfig(filename=f'{script_path}/logs/restic.log', encoding='utf-8', level=logging.INFO, format='%(asctime)s %(message)s', datefmt='%d/%m/%Y %I:%M:%S %p')
 config_location = f'{script_path}/config/config.yml'
 logging.info(f'Opening {config_location} as the configuration file.')
 
