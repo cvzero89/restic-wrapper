@@ -14,22 +14,25 @@ setup_logging(loaded_config, script_path)
 db_file = loaded_config['server']['db']
 default_backup_interval = loaded_config['server']['default_backup_interval']
 logger = logging.getLogger(__name__)
-def init_db():
-    logger.info('Initializing database...')
-    conn = sqlite3.connect(db_file)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS clients (
-            id TEXT PRIMARY KEY,
-            last_backup TIMESTAMP,
-            backup_interval_hours INTEGER DEFAULT 24,
-            last_forget TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+def init_db(db_file):
+    if not os.path.exists(db_file):
+        logger.info('Initializing database...')
+        conn = sqlite3.connect(db_file)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id TEXT PRIMARY KEY,
+                last_backup TIMESTAMP,
+                backup_interval_hours INTEGER DEFAULT 24,
+                last_forget TIMESTAMP
+            )
+        """)
+        conn.commit()
+        conn.close()
+    else:
+        logger.info('Found existing database...')
 
-init_db()
+init_db(db_file)
 
 @app.post("/register")
 async def register(request: Request):
@@ -38,13 +41,10 @@ async def register(request: Request):
     logger.info(f'Client: {client_id}')
     conn = sqlite3.connect(db_file)
     db_connection = conn.cursor()
-
     db_connection.execute("SELECT last_backup, backup_interval_hours FROM clients WHERE id = ?", (client_id,))
     row = db_connection.fetchone()
-
     now = datetime.now(timezone.utc)
-    action = "ok"
-
+    action = None
     if row:
         last_backup, interval = row
         interval = interval or default_backup_interval
@@ -60,6 +60,10 @@ async def register(request: Request):
 
     conn.commit()
     conn.close()
+
+    if action != 'backup':
+        action = 'ok'
+        logger.info('No backup needed.')
 
     return {"status": "ok", "action": action}
 

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 def run_once(server_url, client_id, restic_cmd):
     try:
+        logger.info(f'Registering {client_id} at {server_url}...')
         check = requests.post(f"{server_url}/register", json={"id": client_id}, timeout=10)
         check.raise_for_status()
         action = check.json().get("action", "ok")
@@ -28,6 +29,7 @@ def run_once(server_url, client_id, restic_cmd):
 
         try:
             requests.post(f"{server_url}/report", json={"id": client_id, "success": success}, timeout=10)
+            logger.info(f'Sent report to server with status: {success}.')
         except Exception as e:
             logger.info(f"[{client_id}] Failed to report result: {e}")
     else:
@@ -55,6 +57,7 @@ def run_forget(server_url, client_id, forget_cmd):
 
         try:
             requests.post(f"{server_url}/forget/report", json={"id": client_id, "success": success}, timeout=10)
+            logger.info(f'Sent report to server with status: {success}.')
         except Exception as e:
             logger.info(f"[{client_id}] Failed to report forget result: {e}")
 
@@ -75,7 +78,7 @@ def main():
     client_id = loaded_config['client_id'] if loaded_config.get('client_id') else socket.gethostname()
     while True:
         run_once(server_url, client_id, restic_cmd)
-        time.sleep(10)
+        time.sleep(60)
         run_forget(server_url, client_id, forget_cmd)
         time.sleep(check_interval)
 
