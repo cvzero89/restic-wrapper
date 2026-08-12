@@ -4,6 +4,7 @@ import sys
 import datetime
 import os
 from dotenv import load_dotenv
+from assets.notify import send_notification
 
 class ResticBackup:
 
@@ -11,7 +12,7 @@ class ResticBackup:
     Defining the restic class to backup, list snaphosts, restore, mount and forget.
     Includes a subprocess method that will print output while executing, useful for restores and backups which will take long and will only clear the buffer at the end of the command.
     '''
-    def __init__(self, loaded_config, restic_path, script_path, options=None, forget_options=None, exclude=None):
+    def __init__(self, loaded_config, restic_path, script_path, options=None, forget_options=None, exclude=None, ntfy_config=None):
         self.repo_path = loaded_config['repo_path']
         self.backup_path = loaded_config['backup_path']
         self.options = loaded_config['options']
@@ -24,6 +25,7 @@ class ResticBackup:
         self.enabled = loaded_config['enabled']
         self.script_path = script_path
         self.restic = restic_path
+        self.ntfy_config = ntfy_config
 
     def run_command(self, cmd):
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
@@ -105,9 +107,21 @@ class ResticBackup:
         if stderr:
            print(f'Error creating backup: {stderr}')
            logging.debug(f'Error creting backup: {stderr}')
+           send_notification(
+               self.ntfy_config,
+               title='Backup Failed',
+               message=f'Error creating backup of {self.backup_path} on {self.backup_type} at {now}.\n{stderr}',
+               success=False,
+           )
            return False
         print(f'{stdout}\nSuccessfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
         logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
+        send_notification(
+            self.ntfy_config,
+            title='Backup Successful',
+            message=f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.',
+            success=True,
+        )
     
     def forget(self):
         '''
@@ -120,9 +134,21 @@ class ResticBackup:
         if stderr:
             print(f'Error forgetting old snapshots: {stderr}')
             logging.debug(f'Error forgetting old snapshots from {self.backup_type}.')
+            send_notification(
+                self.ntfy_config,
+                title='Forget Failed',
+                message=f'Error forgetting old snapshots from {self.backup_type} at {now}.\n{stderr}',
+                success=False,
+            )
             return False
         print(f'{stdout}\nSuccessfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
         logging.info(f'Successfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
+        send_notification(
+            self.ntfy_config,
+            title='Forget Successful',
+            message=f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.',
+            success=True,
+        )
 
     def list_snapshots(self):
         job = 'snapshots'

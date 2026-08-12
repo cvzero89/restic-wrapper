@@ -17,3 +17,4 @@ typing-inspection==0.4.1
 typing_extensions==4.15.0
 urllib3==2.5.0
 uvicorn==0.35.0
+python-ntfy==0.11.2

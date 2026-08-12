@@ -84,18 +84,19 @@ def main():
     command = args.command
     servers = config['servers']
     restic_path = config['restic_path']
+    ntfy_config = config.get('ntfy')
     if single in servers:
         loaded_config = load_environment(single)
         if loaded_config is None:
             sys.exit() 
-        task = ResticBackup(loaded_config, restic_path, script_path)
+        task = ResticBackup(loaded_config, restic_path, script_path, ntfy_config=ntfy_config)
         choice(action, task, snapshot_id, restore_path, single, command)
     elif single == '' or single == None:
         for restic_task in servers:
             loaded_config = load_environment(restic_task)
             if loaded_config is None:
                 continue
-            task = ResticBackup(loaded_config, restic_path, script_path)
+            task = ResticBackup(loaded_config, restic_path, script_path, ntfy_config=ntfy_config)
             choice(action, task, snapshot_id, restore_path, single, command)
     else:
         print(f'Selection cannot be found in config file.')

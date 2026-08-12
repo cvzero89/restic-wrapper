@@ -2,6 +2,15 @@ server_url: 'http://localhost:8888' ## Change to the real host and port
 check_interval: 6
 python_interp: '/Users/user/example/venv/bin/python3' ## Change to the Python interpreter to be used
 
+ntfy:
+  enabled: true
+  topic: restic-backups
+  server: https://ntfy.sh
+  # auth: tk_your_token_here  # Optional: token string for Bearer auth
+  # auth:                      # Optional: [username, password] for Basic auth
+  #   - username
+  #   - password
+
 logging:
   log_file: "client.log"
   log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
