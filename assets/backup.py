@@ -1,261 +1,228 @@
 import subprocess
 import logging
-import sys
 import datetime
 import os
-from dotenv import load_dotenv
+import shlex
+from dotenv import dotenv_values
 from assets.notify import send_notification
+
+# restic exit code when a backup snapshot was created but some files could not be read.
+RESTIC_INCOMPLETE_SNAPSHOT = 3
 
 class ResticBackup:
 
     '''
     Defining the restic class to backup, list snaphosts, restore, mount and forget.
     Includes a subprocess method that will print output while executing, useful for restores and backups which will take long and will only clear the buffer at the end of the command.
+    Every action returns True on success and False on failure so the caller can set the exit code.
     '''
-    def __init__(self, loaded_config, restic_path, script_path, options=None, forget_options=None, exclude=None, ntfy_config=None):
+    def __init__(self, loaded_config, restic_path, script_path, ntfy_config=None):
         self.repo_path = loaded_config['repo_path']
         self.backup_path = loaded_config['backup_path']
-        self.options = loaded_config['options']
-        self.exclude = loaded_config['exclude']
+        self.options = loaded_config.get('options') or {}
+        self.exclude = loaded_config.get('exclude')
         self.backup_type = loaded_config['type']
-        if self.backup_type != 's3':
-            self.host = loaded_config['host']
+        self.host = loaded_config.get('host')
         self.password_file = loaded_config['password_file']
-        self.forget_options = loaded_config['forget_options']
-        self.enabled = loaded_config['enabled']
+        self.forget_options = loaded_config.get('forget_options') or {}
         self.script_path = script_path
         self.restic = restic_path
         self.ntfy_config = ntfy_config
 
     def run_command(self, cmd):
-        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
         '''
         Read and print the output while the process is running.
+        stderr is merged into stdout so a chatty stream can never fill its pipe and block restic.
         Catches the KeyboardInterrupt, needed for the mount closing.
         '''
+        logging.debug(f'Running command {shlex.join(cmd)}.')
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', env=self.build_env())
+        output = []
         try:
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    print(output.strip())
+            for line in process.stdout:
+                print(line.rstrip())
+                output.append(line)
         except KeyboardInterrupt:
             process.terminate()
-            process.wait()
+        returncode = process.wait()
+        return returncode, ''.join(output)
 
-        stdout, stderr = process.communicate()
-        logging.debug(f'Ran command {cmd}.')
-        return stdout, stderr
+    def repo(self):
+        if self.backup_type == 'sftp':
+            return f'sftp:{self.host}:{self.repo_path}'
+        elif self.backup_type == 's3':
+            return f's3:{self.repo_path}'
+        return self.repo_path
 
-    def type_selector(self, job, options=None, snapshot_id=None, restore_path=None):
-
+    def base_command(self, job):
         '''
-        type_selector is used to modify the restic command based on the type of host used, local, FTP or S3.
-        Each task will call it to get a return of the command needed. Some options will differ like forget(daily, weekly, monthly), exclude, etc.
         All commands include --password-file to allow running from cron.
         '''
-        if self.backup_type == 'sftp':
-            host = f'{self.backup_type}:{self.host}:{self.repo_path}'
-        elif self.backup_type == 's3':
-            self.s3_env_set()
-            host = f'{self.backup_type}:{self.repo_path}'
-        else:
-            host = f'{self.repo_path}'
+        return [self.restic, '-r', self.repo(), '--password-file', self.password_file, *job]
 
-        if job == 'backup':
-            exclude_file = self.set_exclude()
-            cmd = f'{self.restic} -r {host} {options} --exclude-file={exclude_file} {job} {self.backup_path} --password-file {self.password_file}'
-        elif job == 'snapshots':
-            cmd = f'{self.restic} -r {host} {job} --password-file {self.password_file}'
-        elif job == 'restore':
-            cmd = f'{self.restic} -r {host} {job} {snapshot_id} --target {restore_path} --password-file {self.password_file}'
-        elif job == 'forget':
-            cmd = f'{self.restic} -r {host} {job} --keep-daily {self.forget_options["daily"]} --keep-weekly {self.forget_options["weekly"]} --keep-monthly {self.forget_options["monthly"]} --password-file {self.password_file}'
-        elif job == 'init':
-            cmd = f'{self.restic} -r {host} {job} --password-file {self.password_file}' 
-        elif job == 'mount':
-            cmd = f'{self.restic} -r {host} {job} {restore_path} --password-file {self.password_file}'
-        elif job[0] == 'other':
-            cmd = f'{self.restic} -r {host} {job[1]} --password-file {self.password_file}'
-        else:
-            print(f'Task is not defined.')
-            logging.warning(f'Task is not defined. Exiting.')
-            sys.exit()
-        return cmd
+    def build_env(self):
+        '''
+        S3 credentials are read from the repo's .env-file into the subprocess environment only,
+        so repos with different credentials never leak into each other.
+        '''
+        env = os.environ.copy()
+        if self.backup_type == 's3':
+            s3_file = self.options.get('.env-file')
+            if s3_file:
+                env.update({key: value for key, value in dotenv_values(s3_file).items() if value is not None})
+        return env
+
+    def notify(self, title, message, success):
+        send_notification(self.ntfy_config, title=title, message=message, success=success)
 
     def create(self):
-        job = 'init'
-        cmd = self.type_selector(job)
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-            print(f'Error initializing repository: {stderr}')
-            logging.debug(f'Error initializing repository: {stderr}')
+        returncode, output = self.run_command(self.base_command(['init']))
+        if returncode != 0:
+            print(f'Error initializing repository: {output[-2000:]}')
+            logging.error(f'Error initializing repository {self.repo_path} on {self.backup_type} (exit {returncode}): {output[-2000:]}')
             return False
-        print(f'{stdout}\nSuccessfully created repo for {self.repo_path} on {self.backup_type}.')
+        print(f'Successfully created repo for {self.repo_path} on {self.backup_type}.')
         logging.info(f'Successfully created repo for {self.repo_path} on {self.backup_type}.')
+        return True
 
-
-    def backup(self, options):
+    def backup(self):
         '''
         Backup options can be set on the config file.
+        Exit code 3 means the snapshot was created but some files were unreadable: it counts as a success with a warning.
         '''
-        job = 'backup'
         now = datetime.datetime.now()
-        cmd = self.type_selector(job, options) 
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-           print(f'Error creating backup: {stderr}')
-           logging.debug(f'Error creting backup: {stderr}')
-           send_notification(
-               self.ntfy_config,
-               title='Backup Failed',
-               message=f'Error creating backup of {self.backup_path} on {self.backup_type} at {now}.\n{stderr}',
-               success=False,
-           )
-           return False
-        print(f'{stdout}\nSuccessfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
-        logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
-        send_notification(
-            self.ntfy_config,
-            title='Backup Successful',
-            message=f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.',
-            success=True,
-        )
-    
-    def forget(self):
-        '''
-        Forget parameters can be set on the config file.
-        '''
-        job = 'forget'
-        now = datetime.datetime.now()
-        cmd = self.type_selector(job)
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-            print(f'Error forgetting old snapshots: {stderr}')
-            logging.debug(f'Error forgetting old snapshots from {self.backup_type}.')
-            send_notification(
-                self.ntfy_config,
-                title='Forget Failed',
-                message=f'Error forgetting old snapshots from {self.backup_type} at {now}.\n{stderr}',
+        cmd = self.base_command(['backup', *self.option_parser(), *self.exclude_args(), self.backup_path])
+        returncode, output = self.run_command(cmd)
+        if returncode == RESTIC_INCOMPLETE_SNAPSHOT:
+            logging.warning(f'Backup of {self.backup_path} on {self.backup_type} completed with unreadable files: {output[-2000:]}')
+            self.notify(
+                'Backup Completed With Warnings',
+                f'Backup of {self.backup_path} on {self.backup_type} at {now} skipped some unreadable files.\n{output[-1000:]}',
+                success=False,
+            )
+            return True
+        if returncode != 0:
+            print(f'Error creating backup (exit {returncode}).')
+            logging.error(f'Error creating backup of {self.backup_path} on {self.backup_type} (exit {returncode}): {output[-2000:]}')
+            self.notify(
+                'Backup Failed',
+                f'Error creating backup of {self.backup_path} on {self.backup_type} at {now}.\n{output[-1000:]}',
                 success=False,
             )
             return False
-        print(f'{stdout}\nSuccessfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
-        logging.info(f'Successfully forgot backup for {self.repo_path} at {now} on {self.backup_type}.')
-        send_notification(
-            self.ntfy_config,
-            title='Forget Successful',
-            message=f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.',
+        print(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
+        logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
+        self.notify(
+            'Backup Successful',
+            f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.',
             success=True,
         )
+        return True
+
+    def forget(self):
+        '''
+        Forget parameters can be set on the config file. --prune removes the unreferenced data so the repo actually shrinks.
+        '''
+        now = datetime.datetime.now()
+        cmd = self.base_command([
+            'forget', '--prune',
+            '--keep-daily', str(self.forget_options.get('daily', 7)),
+            '--keep-weekly', str(self.forget_options.get('weekly', 4)),
+            '--keep-monthly', str(self.forget_options.get('monthly', 6)),
+        ])
+        returncode, output = self.run_command(cmd)
+        if returncode != 0:
+            print(f'Error forgetting old snapshots (exit {returncode}).')
+            logging.error(f'Error forgetting old snapshots for {self.repo_path} on {self.backup_type} (exit {returncode}): {output[-2000:]}')
+            self.notify(
+                'Forget Failed',
+                f'Error forgetting old snapshots from {self.backup_type} at {now}.\n{output[-1000:]}',
+                success=False,
+            )
+            return False
+        print(f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.')
+        logging.info(f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.')
+        self.notify(
+            'Forget Successful',
+            f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.',
+            success=True,
+        )
+        return True
 
     def list_snapshots(self):
-        job = 'snapshots'
-        cmd = self.type_selector(job)
         print(f'Listing snapshots from {self.backup_type}:{self.repo_path}.')
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-           print(f'Error listing snapshots: {stderr}')
-           logging.debug(f'Error listing snapshots: {stderr}')
-           return False
+        returncode, output = self.run_command(self.base_command(['snapshots']))
+        if returncode != 0:
+            logging.error(f'Error listing snapshots from {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
+            return False
         logging.info(f'Listed snapshots from: {self.backup_type}:{self.repo_path}.')
+        return True
 
-    def restore(self, snapshot_id, restore_path, options=None):
+    def restore(self, snapshot_id, restore_path):
         if not snapshot_id or not restore_path:
-            logging.warning(f'snapshot ID or restore path missing.')
-            print(f'snapshot ID or restore path missing.')
-            sys.exit() 
-        job = 'restore'
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-           print(f'Error restoring snapshot: {stderr}')
-           logging.debug(f'Error restoring snapshot: {snapshot_id}.')
-           return False
-        print(f'Restored snapshot {snapshot_id} from: {self.backup_type} to {restore_path}\n{stdout}')
+            logging.warning('snapshot ID or restore path missing.')
+            print('snapshot ID or restore path missing.')
+            return False
+        returncode, output = self.run_command(self.base_command(['restore', snapshot_id, '--target', restore_path]))
+        if returncode != 0:
+            logging.error(f'Error restoring snapshot {snapshot_id} (exit {returncode}): {output[-2000:]}')
+            return False
+        print(f'Restored snapshot {snapshot_id} from: {self.backup_type} to {restore_path}')
         logging.info(f'Restored snapshot {snapshot_id} from: {self.backup_type} to {restore_path}')
+        return True
 
-    def mount(self, restore_path, snapshot_id=None, options=None):
+    def mount(self, restore_path):
         '''
         This is to mount the repo to a FUSE mountpoint and browse the files. Useful when there are only a handful of files to restore.
         It assumes FUSE is installed.
         '''
-
         if not restore_path:
-            logging.warning(f'Restore path missing.')
-            print(f'Restore path missing.')
-            sys.exit() 
-        job = 'mount'
-        unmount_command = f'umount {restore_path}'
-        run_umount = subprocess.Popen(unmount_command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, encoding='utf-8')
-        cmd = self.type_selector(job, options, snapshot_id, restore_path)
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-           print(f'Error mounting snapshot: {stderr}')
-           logging.debug(f'Error mounting snapshot from: {self.backup_type}.')
-           return False
-        print(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
+            logging.warning('Restore path missing.')
+            print('Restore path missing.')
+            return False
+        # Clear a leftover mount from a previous run; failure just means nothing was mounted.
+        subprocess.run(['umount', restore_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f'Mounting snapshots from: {self.backup_type} to {restore_path}. Press Ctrl+C to unmount.')
+        returncode, output = self.run_command(self.base_command(['mount', restore_path]))
+        # Ctrl+C ends the mount: restic exits with 130 or is killed by a signal (negative code), both are normal.
+        if returncode > 0 and returncode != 130:
+            logging.error(f'Error mounting snapshots from {self.backup_type} (exit {returncode}): {output[-2000:]}')
+            return False
         logging.info(f'Mounted snapshots from: {self.backup_type} to {restore_path}')
+        return True
 
     def other(self, command):
-        job = ['other', command]
-        cmd = self.type_selector(job)
-        stdout, stderr = self.run_command(cmd)
-        if stderr:
-            print(f'Ran {command} at  {stderr}')
-            logging.debug(f'Ran {command} at {self.backup_type}:{self.repo_path}.')
+        returncode, output = self.run_command(self.base_command(shlex.split(command)))
+        if returncode != 0:
+            logging.error(f'Running {command} at {self.backup_type}:{self.repo_path} failed (exit {returncode}): {output[-2000:]}')
             return False
-        print(f'Ran {command} at {self.backup_type}:{self.repo_path}. {stdout}')
         logging.info(f'Ran {command} at {self.backup_type}:{self.repo_path}.')
+        return True
 
     def option_parser(self):
-        options_dict = self.options
         options = []
-        if options_dict:
-            if options_dict['no-scan'] == True:
-                options.append('--no-scan')
-            if options_dict['read-concurrency'] == True:
-                options.append('--read-concurrency')
-            if options_dict['compression']:
-                compression = f"--compression={options_dict['compression']}"
-                options.append(compression)
-            try:
-                if options_dict['tags']:
-                    for tag in options_dict['tags'].split(','):
-                        tagger = f'--tag {tag}'
-                        options.append(tagger)
-            except KeyError:
-                ...
-        return ' '.join(options)
+        if self.options.get('no-scan') is True:
+            options.append('--no-scan')
+        read_concurrency = self.options.get('read-concurrency')
+        if isinstance(read_concurrency, int) and not isinstance(read_concurrency, bool) and read_concurrency > 0:
+            options += ['--read-concurrency', str(read_concurrency)]
+        if self.options.get('compression'):
+            options.append(f"--compression={self.options['compression']}")
+        for tag in split_list(self.options.get('tags')):
+            options += ['--tag', tag]
+        return options
 
-    def s3_env_set(self):
+    def exclude_args(self):
         '''
-        Setting the enviromental variables to connect to S3.
-        File location can be changed on .config_restic.json → options>.env-file.
+        Excludes come from the exclude param on the config file, either a YAML list or a comma separated string.
         '''
-#        os.unsetenv('AWS_ACCESS_KEY_ID')
-#        os.unsetenv('AWS_SECRET_ACCESS_KEY')
-#        os.unsetenv('AWS_SECRET_ACCESS_KEY')
-        s3_file = self.options['.env-file']
-        if self.backup_type == 's3':
-            load_dotenv(f'{s3_file}')
-            os.getenv('AWS_ACCESS_KEY_ID')
-            os.getenv('AWS_SECRET_ACCESS_KEY')
-            os.getenv('AWS_DEFAULT_REGION')
+        excludes = split_list(self.exclude)
+        logging.info(f'Excluding terms: {excludes} for {self.backup_type}:{self.repo_path}.')
+        return [arg for item in excludes for arg in ('--exclude', item)]
 
-    def set_exclude(self):
-        '''
-        The exclude file is created on each run based on the exclude param on the config file.
-        Words needs to be separated by comma, no space. If nothing is provided then an empty file is created.
-        '''
-        exclude_file = f'{self.script_path}/config/excludes.txt'
-        logging.info(f'Excluding terms: {self.exclude}. Creating exclude.txt for {self.backup_type}.')
-        with open(exclude_file, 'w') as my_file:
-            if self.exclude is not None: 
-                for item in self.exclude.split(','):
-                    my_file.write(f'{item}\n')
-            else:
-                with open(exclude_file, 'w'):
-                    pass
-        return exclude_file
+def split_list(value):
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = value.split(',')
+    return [str(item).strip() for item in value if str(item).strip()]

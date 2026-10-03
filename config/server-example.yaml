@@ -1,6 +1,8 @@
 server: 
   db: 'backups.db'
-  default_backup_interval: 24
+  default_backup_interval: 24  # hours
+  forget_interval_days: 7
+  # auth_token: change_me  # Optional: clients must send the same token
 
 logging:
   log_file: "server.log"

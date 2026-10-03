@@ -59,19 +59,28 @@ You have a central server tracking clients, backups, and weekly pruning (`restic
 
 ### Prerequisites
 
-- Python 3.8+  
+- Python 3.9+  
 - restic installed and configured (repository, credentials).  
 - Required Python packages:  
   ```bash
-  pip install fastapi uvicorn requests pyyaml
+  pip install -r requirements.txt
   ```
 
 ---
 
 ## Configuration
 
-- **restic-wrapper** config files still present (e.g. `config/config.yml`, `excludes.txt`) for your existing backup/restore behavior.  
-- New configuration (server‑client) done in server parameters (port, default intervals), and client settings (restic repository path, commands).  
+Copy each example file in `config/` and edit it:
+
+| File | Example | Used by |
+|------|---------|---------|
+| `config/config.yml` | `config-example.yml` | `restic.py` – repos, backup paths, excludes, forget policy, ntfy. |
+| `config/server.yaml` | `server-example.yaml` | `assets/server.py` – database, backup interval (hours), forget interval (days), optional `auth_token`. |
+| `config/client.yaml` | `client-example.yaml` | `assets/client.py` – `server_url`, `python_interp`, check interval, optional `auth_token` and `client_id`. |
+
+If `auth_token` is set on the server, every client must use the same value. Without it the API accepts any request, so only expose it on a trusted network.
+
+`restic.py` exits with a non-zero code when any repo fails, which is how the client knows whether to report success. A backup where restic could not read some files (exit code 3) still counts as successful, but you get a warning notification.  
 
 ---
 
@@ -79,8 +88,10 @@ You have a central server tracking clients, backups, and weekly pruning (`restic
 
 ### Starting the Server
 
+Run from the `assets/` directory:
+
 ```bash
-uvicorn server:app --host 0.0.0.0 --port 8080
+cd assets && uvicorn server:app --host 0.0.0.0 --port 8080
 ```
 
 You can also deploy via systemd:
@@ -93,7 +104,7 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/env uvicorn server:app --host 0.0.0.0 --port 8080
-WorkingDirectory=/path/to/restic-wrapper/orchestrator
+WorkingDirectory=/path/to/restic/assets
 Restart=always
 User=youruser
 
@@ -103,11 +114,11 @@ WantedBy=multi-user.target
 
 ### Running the Client
 
-Edit `client.py` to set:
+Set `server_url` and `python_interp` in `config/client.yaml`; repositories and backup paths come from `config/config.yml`.
 
-- `SERVER_URL`
-- Your restic repository and backup paths  
-- (Optional) `FORGET_CMD` if using pruning
+```bash
+python3 assets/client.py
+```
 
 Deploy as a service using systemd:
 
@@ -118,7 +129,7 @@ Description=Restic Backup Client
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /path/to/client.py
+ExecStart=/path/to/restic/venv/bin/python3 /path/to/restic/assets/client.py
 Restart=always
 User=youruser
 
@@ -159,7 +170,7 @@ The server uses these to decide whether to instruct a client to run a backup or 
 ## Policies
 
 - **Backup interval**: Default is 24 hours unless configured per client.  
-- **Forget interval**: Once per week (7 days). Even though client polls every 6 hours, the server only returns `forget` action if 7 days have passed since last successful forget.
+- **Forget interval**: `forget_interval_days` in `server.yaml`, 7 by default. Even though the client polls every 6 hours, the server only returns the `forget` action once that many days have passed since the last successful forget. Forget runs with `--prune`, so unreferenced data is removed from the repository.
 
 ---
 
