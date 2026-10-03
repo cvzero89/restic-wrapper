@@ -14,7 +14,7 @@ You have a central server tracking clients, backups, and weekly pruning (`restic
 - [Usage](#usage)  
 - [Endpoints](#endpoints)  
 - [Database Schema](#database-schema)  
-- [Systemd Services](#systemd-services)  
+- [Tests](#tests)  
 
 ---
 
@@ -80,18 +80,35 @@ Copy each example file in `config/` and edit it:
 
 If `auth_token` is set on the server, every client must use the same value. Without it the API accepts any request, so only expose it on a trusted network.
 
-`restic.py` exits with a non-zero code when any repo fails, which is how the client knows whether to report success. A backup where restic could not read some files (exit code 3) still counts as successful, but you get a warning notification.  
+A backup where restic could not read some files (restic exit code 3) still counts as successful, but you get a warning notification.
+
+The config files can be moved with environment variables: `RESTIC_WRAPPER_CONFIG` (config.yml), `RESTIC_SERVER_CONFIG` and `RESTIC_CLIENT_CONFIG`.
 
 ---
 
 ## Usage
 
-### Starting the Server
-
-Run from the `assets/` directory:
+### restic.py
 
 ```bash
-cd assets && uvicorn server:app --host 0.0.0.0 --port 8080
+python3 restic.py backup                      # every enabled repo
+python3 restic.py --single server_1 snapshots
+python3 restic.py --single server_1 restore --snapshot_id latest --restore_path /tmp/restore
+python3 restic.py --single server_1 mount --restore_path /tmp/mnt
+python3 restic.py check                       # set check_read_data_subset (e.g. 5%) in a repo's options to also read data
+python3 restic.py --single server_1 other --command "stats latest"
+```
+
+`init`, `restore` and `mount` need `--single`. Backup and forget first remove stale locks left by a crashed restic run (`restic unlock`), and backup notifications include a summary of files and data added.
+
+Exit codes: `0` success, `3` one or more repos failed (already reported to ntfy), `1` any other error such as a missing config or unknown repo. The client uses this to report the result to the server and to send its own notification only when `restic.py` did not.
+
+### Starting the Server
+
+Run from the repository root (or `cd assets && uvicorn server:app ...`):
+
+```bash
+uvicorn assets.server:app --host 0.0.0.0 --port 8080
 ```
 
 You can also deploy via systemd:
@@ -103,8 +120,8 @@ Description=Restic Orchestrator Server
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/env uvicorn server:app --host 0.0.0.0 --port 8080
-WorkingDirectory=/path/to/restic/assets
+ExecStart=/path/to/restic/venv/bin/uvicorn assets.server:app --host 0.0.0.0 --port 8080
+WorkingDirectory=/path/to/restic
 Restart=always
 User=youruser
 
@@ -164,6 +181,16 @@ SQLite table `clients` with columns:
 | `last_forget`        | TIMESTAMP   | When last prune / `restic forget` succeeded. |
 
 The server uses these to decide whether to instruct a client to run a backup or forget operation.
+
+---
+
+## Tests
+
+The tests use only the standard library and a fake restic binary, so no repository is needed:
+
+```bash
+python3 -m unittest
+```
 
 ---
 

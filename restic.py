@@ -5,18 +5,23 @@ import logging
 from logging.handlers import RotatingFileHandler
 import yaml
 from assets.backup import ResticBackup
+from assets.notify import send_notification
+
+# Exit code when one or more repos failed. Each failure was already sent to ntfy,
+# so the orchestrator client does not need to notify again.
+EXIT_REPO_FAILED = 3
 
 script_path = os.path.abspath(os.path.dirname(__file__))
 log_path = f'{script_path}/logs'
 os.makedirs(log_path, exist_ok=True)
 log_handler = RotatingFileHandler(f'{log_path}/restic.log', maxBytes=5242880, backupCount=5, encoding='utf-8')
 logging.basicConfig(handlers=[log_handler], level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', datefmt='%d/%m/%Y %I:%M:%S %p')
-config_location = f'{script_path}/config/config.yml'
+config_location = os.environ.get('RESTIC_WRAPPER_CONFIG', f'{script_path}/config/config.yml')
 logging.info(f'Opening {config_location} as the configuration file.')
 
 try:
     with open(config_location) as config_file:
-        config = yaml.safe_load(config_file)
+        config = yaml.safe_load(config_file) or {}
 except FileNotFoundError:
     print('Configuration file cannot be opened.')
     logging.error(f'No configuration file at: {config_location}.')
@@ -40,7 +45,7 @@ def load_environment(restic_task):
         return None
     return task_config
 
-def choice(action, task, snapshot_id, restore_path, single, command):
+def choice(action, task, snapshot_id, restore_path, command):
     '''
     To trigger the actions. Returns True if the action succeeded.
     Restore, init and mount cannot run for all repos, a single repo must be chosen with --single <repo>
@@ -57,6 +62,8 @@ def choice(action, task, snapshot_id, restore_path, single, command):
         return task.forget()
     elif action == 'snapshots':
         return task.list_snapshots()
+    elif action == 'check':
+        return task.check()
     elif action == 'restore':
         return task.restore(snapshot_id, restore_path)
     elif action == 'mount':
@@ -71,7 +78,7 @@ def main():
     parser.add_argument('--snapshot_id', type=str, help='Use snapshot ID as argument.')
     parser.add_argument('--restore_path', type=str, help='Set restore path (also the mountpoint for mount).')
     parser.add_argument('--command', type=str, help='Pass other command.')
-    parser.add_argument('action', type=str, help='init, backup, restore, snapshots, mount, forget or other.', choices=['init', 'backup', 'forget', 'snapshots', 'restore', 'mount', 'other'])
+    parser.add_argument('action', type=str, help='init, backup, restore, snapshots, mount, forget, check or other.', choices=['init', 'backup', 'forget', 'snapshots', 'check', 'restore', 'mount', 'other'])
     args = parser.parse_args()
     single = args.single
     servers = config.get('servers') or {}
@@ -98,13 +105,18 @@ def main():
         if loaded_config is None:
             continue
         task = ResticBackup(loaded_config, restic_path, script_path, ntfy_config=ntfy_config)
-        if not choice(args.action, task, args.snapshot_id, args.restore_path, single, args.command):
+        if not choice(args.action, task, args.snapshot_id, args.restore_path, args.command):
             failed.append(restic_task)
 
     # A non-zero exit code lets the orchestrator client know the run failed.
     if failed:
         logging.error(f'{args.action} failed for: {", ".join(failed)}.')
-        sys.exit(1)
+        sys.exit(EXIT_REPO_FAILED)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.exception('restic.py stopped with an unexpected error.')
+        send_notification(config.get('ntfy'), title='Restic Wrapper Error', message=f'restic.py stopped with an unexpected error: {e!r}', success=False)
+        raise

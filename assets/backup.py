@@ -3,6 +3,7 @@ import logging
 import datetime
 import os
 import shlex
+import json
 from dotenv import dotenv_values
 from assets.notify import send_notification
 
@@ -36,16 +37,18 @@ class ResticBackup:
         Catches the KeyboardInterrupt, needed for the mount closing.
         '''
         logging.debug(f'Running command {shlex.join(cmd)}.')
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', env=self.build_env())
         output = []
-        try:
-            for line in process.stdout:
-                print(line.rstrip())
-                output.append(line)
-        except KeyboardInterrupt:
-            process.terminate()
-        returncode = process.wait()
-        return returncode, ''.join(output)
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', env=self.build_env()) as process:
+            try:
+                for line in process.stdout:
+                    # --json emits a progress line several times per second, too noisy to print or keep.
+                    if json_message(line).get('message_type') == 'status':
+                        continue
+                    print(line.rstrip())
+                    output.append(line)
+            except KeyboardInterrupt:
+                process.terminate()
+        return process.returncode, ''.join(output)
 
     def repo(self):
         if self.backup_type == 'sftp':
@@ -72,6 +75,14 @@ class ResticBackup:
                 env.update({key: value for key, value in dotenv_values(s3_file).items() if value is not None})
         return env
 
+    def unlock(self):
+        '''
+        Removes only stale locks (left by a crashed or killed restic), never locks of a running process.
+        '''
+        returncode, output = self.run_command(self.base_command(['unlock']))
+        if returncode != 0:
+            logging.warning(f'Could not remove stale locks on {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
+
     def notify(self, title, message, success):
         send_notification(self.ntfy_config, title=title, message=message, success=success)
 
@@ -91,13 +102,15 @@ class ResticBackup:
         Exit code 3 means the snapshot was created but some files were unreadable: it counts as a success with a warning.
         '''
         now = datetime.datetime.now()
-        cmd = self.base_command(['backup', *self.option_parser(), *self.exclude_args(), self.backup_path])
+        self.unlock()
+        cmd = self.base_command(['backup', '--json', *self.option_parser(), *self.exclude_args(), self.backup_path])
         returncode, output = self.run_command(cmd)
+        summary = backup_summary(output)
         if returncode == RESTIC_INCOMPLETE_SNAPSHOT:
             logging.warning(f'Backup of {self.backup_path} on {self.backup_type} completed with unreadable files: {output[-2000:]}')
             self.notify(
                 'Backup Completed With Warnings',
-                f'Backup of {self.backup_path} on {self.backup_type} at {now} skipped some unreadable files.\n{output[-1000:]}',
+                f'Backup of {self.backup_path} on {self.backup_type} at {now} skipped some unreadable files. {summary}\n{output[-1000:]}',
                 success=False,
             )
             return True
@@ -110,11 +123,11 @@ class ResticBackup:
                 success=False,
             )
             return False
-        print(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
-        logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.')
+        print(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}')
+        logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}')
         self.notify(
             'Backup Successful',
-            f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}.',
+            f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}',
             success=True,
         )
         return True
@@ -124,6 +137,7 @@ class ResticBackup:
         Forget parameters can be set on the config file. --prune removes the unreferenced data so the repo actually shrinks.
         '''
         now = datetime.datetime.now()
+        self.unlock()
         cmd = self.base_command([
             'forget', '--prune',
             '--keep-daily', str(self.forget_options.get('daily', 7)),
@@ -156,6 +170,25 @@ class ResticBackup:
             logging.error(f'Error listing snapshots from {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
             return False
         logging.info(f'Listed snapshots from: {self.backup_type}:{self.repo_path}.')
+        return True
+
+    def check(self):
+        '''
+        Verifies the repository structure. Set check_read_data_subset (e.g. 5%) in options to also read back part of the data.
+        '''
+        now = datetime.datetime.now()
+        subset = self.options.get('check_read_data_subset')
+        cmd = self.base_command(['check', *(['--read-data-subset', str(subset)] if subset else [])])
+        returncode, output = self.run_command(cmd)
+        if returncode != 0:
+            logging.error(f'Repository check failed for {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
+            self.notify(
+                'Check Failed',
+                f'Repository check failed for {self.repo_path} on {self.backup_type} at {now}.\n{output[-1000:]}',
+                success=False,
+            )
+            return False
+        logging.info(f'Repository check passed for {self.backup_type}:{self.repo_path}.')
         return True
 
     def restore(self, snapshot_id, restore_path):
@@ -226,3 +259,29 @@ def split_list(value):
     if isinstance(value, str):
         value = value.split(',')
     return [str(item).strip() for item in value if str(item).strip()]
+
+def json_message(line):
+    try:
+        message = json.loads(line)
+    except ValueError:
+        return {}
+    return message if isinstance(message, dict) else {}
+
+def human_bytes(size):
+    for unit in ('B', 'KiB', 'MiB', 'GiB'):
+        if size < 1024:
+            return f'{size:.1f} {unit}' if unit != 'B' else f'{size} B'
+        size /= 1024
+    return f'{size:.1f} TiB'
+
+def backup_summary(output):
+    '''
+    Builds a one line summary from the summary message of restic backup --json. Empty if there is none.
+    '''
+    for line in reversed(output.splitlines()):
+        message = json_message(line)
+        if message.get('message_type') == 'summary':
+            return (f"{message.get('files_new', 0)} new and {message.get('files_changed', 0)} changed files, "
+                    f"{human_bytes(message.get('data_added', 0))} added in {message.get('total_duration', 0):.0f}s "
+                    f"(snapshot {str(message.get('snapshot_id', ''))[:8]}).")
+    return ''

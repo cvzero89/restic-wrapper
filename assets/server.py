@@ -7,10 +7,12 @@ import secrets
 import sqlite3
 import os
 import logging
-from misc import setup_logging, import_configuration
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from assets.misc import setup_logging, import_configuration
 
 script_path=os.path.abspath(os.path.dirname(__file__))
-loaded_config = import_configuration(f'{script_path}/../config/server.yaml')
+loaded_config = import_configuration(os.environ.get('RESTIC_SERVER_CONFIG', f'{script_path}/../config/server.yaml'))
 setup_logging(loaded_config, script_path)
 
 server_config = loaded_config['server']
