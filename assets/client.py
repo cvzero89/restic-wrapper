@@ -4,10 +4,15 @@ import socket
 import time
 import logging
 import os
-from misc import setup_logging, import_configuration
-from notify import send_notification
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from assets.misc import setup_logging, import_configuration
+from assets.notify import send_notification
 
 logger = logging.getLogger(__name__)
+
+# restic.py exits with this code when repos failed and it already sent the ntfy notifications.
+EXIT_REPO_FAILED = 3
 
 def run_job(server_url, client_id, cmd, job, headers, ntfy_config=None):
     '''
@@ -38,12 +43,14 @@ def run_job(server_url, client_id, cmd, job, headers, ntfy_config=None):
     except (subprocess.CalledProcessError, OSError) as e:
         logger.error(f"[{client_id}] {job.capitalize()} failed: {e}")
         success = False
-        send_notification(
-            ntfy_config,
-            title=f'{job.capitalize()} Failed - {client_id}',
-            message=f'{job.capitalize()} command failed on client {client_id}.\n{e}',
-            success=False,
-        )
+        already_notified = isinstance(e, subprocess.CalledProcessError) and e.returncode == EXIT_REPO_FAILED
+        if not already_notified:
+            send_notification(
+                ntfy_config,
+                title=f'{job.capitalize()} Failed - {client_id}',
+                message=f'{job.capitalize()} command failed on client {client_id}.\n{e}',
+                success=False,
+            )
 
     try:
         requests.post(f"{server_url}{report_endpoint}", json={"id": client_id, "success": success}, headers=headers, timeout=10).raise_for_status()
@@ -54,7 +61,7 @@ def run_job(server_url, client_id, cmd, job, headers, ntfy_config=None):
 
 def main():
     script_path=os.path.abspath(os.path.dirname(__file__))
-    loaded_config = import_configuration(f'{script_path}/../config/client.yaml')
+    loaded_config = import_configuration(os.environ.get('RESTIC_CLIENT_CONFIG', f'{script_path}/../config/client.yaml'))
     setup_logging(loaded_config, script_path)
 
     server_url = loaded_config['server_url'].rstrip('/')
