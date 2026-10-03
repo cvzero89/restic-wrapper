@@ -7,7 +7,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from assets.misc import setup_logging, import_configuration
-from assets.notify import send_notification
+from assets.notify import send_notification, timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def run_job(server_url, client_id, cmd, job, headers, ntfy_config=None):
             send_notification(
                 ntfy_config,
                 title=f'{job.capitalize()} Failed - {client_id}',
-                message=f'{job.capitalize()} command failed on client {client_id}.\n{e}',
+                message=f'{job.capitalize()} command failed on client {client_id} at {timestamp()}.\n{e}',
                 success=False,
             )
 

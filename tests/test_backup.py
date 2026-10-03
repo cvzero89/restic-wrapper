@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -8,7 +9,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from unittest import mock
 
-from assets.backup import ResticBackup, backup_summary, human_bytes, split_list
+from assets.backup import ResticBackup, backup_summary, human_bytes, readable_output, split_list
 
 # Records its arguments, floods the merged output and exits with FAKE_EXIT.
 FAKE_RESTIC = f'''#!{sys.executable}
@@ -113,17 +114,25 @@ class ActionTest(FakeResticTestCase):
         self.assertIn('2 new and 1 changed files, 2.0 KiB added in 3s (snapshot abcdef12).', message)
         self.assertTrue(self.notify.call_args.kwargs['success'])
 
+    def test_notification_names_host_and_short_time(self):
+        with mock.patch('assets.backup.local_hostname', return_value='laptop'):
+            self.run_quietly(self.task().backup)
+        self.assertEqual(self.notify.call_args.kwargs['title'], 'Backup Successful - laptop')
+        message = self.notify.call_args.kwargs['message']
+        self.assertRegex(message, rf'^Backed up {re.escape(self.tmp)}/my files to {re.escape(self.tmp)}/repo at \d{{2}}/\d{{2}}/\d{{2}} \d{{2}}:\d{{2}}\.\n')
+
     def test_backup_failure(self):
         os.environ['FAKE_EXIT'] = '1'
         result, _ = self.run_quietly(self.task().backup)
         self.assertFalse(result)
-        self.assertEqual(self.notify.call_args.kwargs['title'], 'Backup Failed')
+        self.assertTrue(self.notify.call_args.kwargs['title'].startswith('Backup Failed - '))
 
     def test_backup_incomplete_snapshot_is_success_with_warning(self):
         os.environ.update(FAKE_EXIT='3', FAKE_FLOOD='20000')
         result, _ = self.run_quietly(self.task().backup)
         self.assertTrue(result)
-        self.assertEqual(self.notify.call_args.kwargs['title'], 'Backup Completed With Warnings')
+        self.assertTrue(self.notify.call_args.kwargs['title'].startswith('Backup Completed With Warnings - '))
+        self.assertLessEqual(len(self.notify.call_args.kwargs['message']), 1300)
 
     def test_forget_prunes_with_policy(self):
         result, _ = self.run_quietly(self.task().forget)
@@ -152,6 +161,16 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(human_bytes(512), '512 B')
         self.assertEqual(human_bytes(1536), '1.5 KiB')
         self.assertEqual(human_bytes(3 * 1024 ** 3), '3.0 GiB')
+
+    def test_readable_output(self):
+        output = '\n'.join([
+            'unable to open cache',
+            json.dumps({'message_type': 'error', 'error': {'message': 'open /a: permission denied'}, 'item': '/a'}),
+            json.dumps({'message_type': 'summary', 'files_new': 1}),
+            json.dumps({'message_type': 'exit_error', 'code': 3, 'message': 'Warning: at least one source file could not be read'}),
+        ])
+        self.assertEqual(readable_output(output), 'unable to open cache\nopen /a: permission denied\nWarning: at least one source file could not be read')
+        self.assertEqual(len(readable_output('x' * 5000)), 1000)
 
     def test_backup_summary_without_json(self):
         self.assertEqual(backup_summary('plain text\n[not, a, dict]\n'), '')
