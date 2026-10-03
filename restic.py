@@ -5,7 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import yaml
 from assets.backup import ResticBackup
-from assets.notify import send_notification
+from assets.notify import send_notification, timestamp, local_hostname
 
 # Exit code when one or more repos failed. Each failure was already sent to ntfy,
 # so the orchestrator client does not need to notify again.
@@ -118,5 +118,5 @@ if __name__ == '__main__':
         main()
     except Exception as e:
         logging.exception('restic.py stopped with an unexpected error.')
-        send_notification(config.get('ntfy'), title='Restic Wrapper Error', message=f'restic.py stopped with an unexpected error: {e!r}', success=False)
+        send_notification(config.get('ntfy'), title=f'Restic Wrapper Error - {local_hostname()}', message=f'restic.py stopped with an unexpected error at {timestamp()}.\n{e!r}', success=False)
         raise

@@ -1,11 +1,10 @@
 import subprocess
 import logging
-import datetime
 import os
 import shlex
 import json
 from dotenv import dotenv_values
-from assets.notify import send_notification
+from assets.notify import send_notification, timestamp, local_hostname
 
 # restic exit code when a backup snapshot was created but some files could not be read.
 RESTIC_INCOMPLETE_SNAPSHOT = 3
@@ -84,7 +83,10 @@ class ResticBackup:
             logging.warning(f'Could not remove stale locks on {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
 
     def notify(self, title, message, success):
-        send_notification(self.ntfy_config, title=title, message=message, success=success)
+        '''
+        Every notification title names the machine that was backed up.
+        '''
+        send_notification(self.ntfy_config, title=f'{title} - {local_hostname()}', message=message, success=success)
 
     def create(self):
         returncode, output = self.run_command(self.base_command(['init']))
@@ -101,7 +103,7 @@ class ResticBackup:
         Backup options can be set on the config file.
         Exit code 3 means the snapshot was created but some files were unreadable: it counts as a success with a warning.
         '''
-        now = datetime.datetime.now()
+        when = timestamp()
         self.unlock()
         cmd = self.base_command(['backup', '--json', *self.option_parser(), *self.exclude_args(), self.backup_path])
         returncode, output = self.run_command(cmd)
@@ -110,7 +112,7 @@ class ResticBackup:
             logging.warning(f'Backup of {self.backup_path} on {self.backup_type} completed with unreadable files: {output[-2000:]}')
             self.notify(
                 'Backup Completed With Warnings',
-                f'Backup of {self.backup_path} on {self.backup_type} at {now} skipped some unreadable files. {summary}\n{output[-1000:]}',
+                f'Backed up {self.backup_path} to {self.repo()} at {when}, but some files could not be read.\n{summary}\n{readable_output(output)}',
                 success=False,
             )
             return True
@@ -119,15 +121,15 @@ class ResticBackup:
             logging.error(f'Error creating backup of {self.backup_path} on {self.backup_type} (exit {returncode}): {output[-2000:]}')
             self.notify(
                 'Backup Failed',
-                f'Error creating backup of {self.backup_path} on {self.backup_type} at {now}.\n{output[-1000:]}',
+                f'Backup of {self.backup_path} to {self.repo()} failed at {when}.\n{readable_output(output)}',
                 success=False,
             )
             return False
-        print(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}')
-        logging.info(f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}')
+        print(f'Successfully backed up {self.backup_path} to {self.repo()}. {summary}')
+        logging.info(f'Successfully backed up {self.backup_path} to {self.repo()}. {summary}')
         self.notify(
             'Backup Successful',
-            f'Successfully created backup of {self.backup_path} at {now} on {self.backup_type}. {summary}',
+            f'Backed up {self.backup_path} to {self.repo()} at {when}.\n{summary}',
             success=True,
         )
         return True
@@ -136,7 +138,7 @@ class ResticBackup:
         '''
         Forget parameters can be set on the config file. --prune removes the unreferenced data so the repo actually shrinks.
         '''
-        now = datetime.datetime.now()
+        when = timestamp()
         self.unlock()
         cmd = self.base_command([
             'forget', '--prune',
@@ -150,15 +152,15 @@ class ResticBackup:
             logging.error(f'Error forgetting old snapshots for {self.repo_path} on {self.backup_type} (exit {returncode}): {output[-2000:]}')
             self.notify(
                 'Forget Failed',
-                f'Error forgetting old snapshots from {self.backup_type} at {now}.\n{output[-1000:]}',
+                f'Forgetting old snapshots of {self.backup_path} in {self.repo()} failed at {when}.\n{readable_output(output)}',
                 success=False,
             )
             return False
-        print(f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.')
-        logging.info(f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.')
+        print(f'Successfully forgot old snapshots in {self.repo()}.')
+        logging.info(f'Successfully forgot old snapshots in {self.repo()}.')
         self.notify(
             'Forget Successful',
-            f'Successfully forgot old snapshots for {self.repo_path} at {now} on {self.backup_type}.',
+            f'Removed old snapshots of {self.backup_path} from {self.repo()} at {when}.',
             success=True,
         )
         return True
@@ -176,7 +178,7 @@ class ResticBackup:
         '''
         Verifies the repository structure. Set check_read_data_subset (e.g. 5%) in options to also read back part of the data.
         '''
-        now = datetime.datetime.now()
+        when = timestamp()
         subset = self.options.get('check_read_data_subset')
         cmd = self.base_command(['check', *(['--read-data-subset', str(subset)] if subset else [])])
         returncode, output = self.run_command(cmd)
@@ -184,7 +186,7 @@ class ResticBackup:
             logging.error(f'Repository check failed for {self.backup_type}:{self.repo_path} (exit {returncode}): {output[-2000:]}')
             self.notify(
                 'Check Failed',
-                f'Repository check failed for {self.repo_path} on {self.backup_type} at {now}.\n{output[-1000:]}',
+                f'Check of {self.repo()} failed at {when}.\n{readable_output(output)}',
                 success=False,
             )
             return False
@@ -266,6 +268,21 @@ def json_message(line):
     except ValueError:
         return {}
     return message if isinstance(message, dict) else {}
+
+def readable_output(output, limit=1000):
+    '''
+    The tail of restic's output for a notification, with --json error lines turned back into plain messages.
+    '''
+    lines = []
+    for line in output.splitlines():
+        message = json_message(line)
+        if not message:
+            lines.append(line)
+        elif message.get('message_type') == 'error':
+            lines.append((message.get('error') or {}).get('message', line))
+        elif message.get('message_type') == 'exit_error':
+            lines.append(message.get('message', line))
+    return '\n'.join(lines).strip()[-limit:]
 
 def human_bytes(size):
     for unit in ('B', 'KiB', 'MiB', 'GiB'):

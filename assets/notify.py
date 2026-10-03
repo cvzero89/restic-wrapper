@@ -1,7 +1,21 @@
+import datetime
 import logging
+import socket
 from python_ntfy import NtfyClient, MessagePriority
 
 logger = logging.getLogger(__name__)
+
+# DD/MM/YY HH:MM
+TIME_FORMAT = '%d/%m/%y %H:%M'
+
+def timestamp(when=None):
+    return (when or datetime.datetime.now()).strftime(TIME_FORMAT)
+
+def local_hostname():
+    '''
+    Short name of the machine being backed up, e.g. "laptop" instead of "laptop.local".
+    '''
+    return socket.gethostname().split('.')[0]
 
 def _build_client(ntfy_config):
     '''
