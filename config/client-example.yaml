@@ -1,5 +1,7 @@
 server_url: 'http://localhost:8888' ## Change to the real host and port 
-check_interval: 6
+check_interval: 6  # hours between checks with the server
+# auth_token: change_me  # Must match auth_token in server.yaml if set
+# client_id: my-laptop  # Optional: defaults to the hostname
 python_interp: '/Users/user/example/venv/bin/python3' ## Change to the Python interpreter to be used
 
 ntfy:

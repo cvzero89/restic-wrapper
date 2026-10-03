@@ -20,13 +20,15 @@ servers:
       options: 
         no-scan: true
         compression: auto 
-        read-concurrency: false
-        tags: tags  
-      forget_options: 
+        read-concurrency: false  # or a number of files to read in parallel, e.g. 4
+        tags: tags  # comma separated string or a YAML list
+      forget_options:  # forget runs with --prune
         daily: 2
         weekly: 4
         monthly: 4
-      exclude: anything_to_exclude?
+      exclude:  # comma separated string or a YAML list of restic exclude patterns
+        - '*.tmp'
+        - .DS_Store
   
   server_2:
     enabled: true
@@ -37,11 +39,11 @@ servers:
     options: 
       no-scan: true
       compression: auto 
-      read-concurrency: false
+      read-concurrency: false  # or a number of files to read in parallel, e.g. 4
       .env-file: /.env/file/for/the/repo
       tags: tags
     forget_options:
       daily: 2
       weekly: 4
       monthly: 4
-    exclude: anything_to_exclude?
+    exclude: '*.tmp,.DS_Store'
